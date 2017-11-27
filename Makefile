@@ -1,8 +1,20 @@
 GO_VERSION:=$(shell go version)
 
-.PHONY: bench profile
+.PHONY: all clean bench profile lint test contributors install
 
-all: install
+all: clean install lint test bench
+
+clean:
+	go clean ./...
+	rm -rf pprof
+	rm -rf vendor
+	rm -rf ./*.svg
+
+lint:
+	gometalinter --enable-all . | rg -v comment
+
+test:
+	go test -v $(go list ./... | rg -v vendor)
 
 bench:
 	go test -count=5 -run=NONE -bench . -benchmem
@@ -22,3 +34,8 @@ profile:
 	go tool pprof --svg pprof/test.bin pprof/cpu-def.out > cpu-def.svg
 	rm -rf pprof
 	mv ./*.svg bench/
+
+
+contributors:
+	git log --format='%aN <%aE>' | sort -fu > CONTRIBUTORS
+

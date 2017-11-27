@@ -2,6 +2,7 @@
 package glg
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,9 @@ type Glg struct {
 	colors  map[string]func(string) string
 	isColor map[string]bool
 	mode    map[string]int
+	rotate  map[string]int64
+	logBuf  map[string]*bytes.Buffer
+	logLen  map[string]int
 	mu      *sync.Mutex
 }
 
@@ -121,7 +125,10 @@ func New() *Glg {
 			FAIL:  STD,
 			FATAL: STD,
 		},
-		mu: new(sync.Mutex),
+		rotate: map[string]int64{},
+		logBuf: map[string]*bytes.Buffer{},
+		logLen: map[string]int{},
+		mu:     new(sync.Mutex),
 	})
 }
 
@@ -258,6 +265,14 @@ func (g *Glg) AddErrLevel(level string, mode int, isColor bool) *Glg {
 	g.mode[level] = mode
 	g.colors[level] = Red
 	g.isColor[level] = isColor
+	g.rotate[level] = 0
+	g.mu.Unlock()
+	return g
+}
+
+func (g *Glg) EnableRotate(level string, t int64) *Glg {
+	g.mu.Lock()
+	g.rotate[level] = t
 	g.mu.Unlock()
 	return g
 }
@@ -433,13 +448,17 @@ func (g *Glg) out(level, format string, val ...interface{}) error {
 	if g.mode[level] == STD || g.mode[level] == BOTH {
 		_, ok := g.colors[level]
 		if g.isColor[level] && ok {
-			g.mu.Lock()
-			_, err = fmt.Fprintf(g.std[level], g.colors[level](str)+"\n", val...)
-			g.mu.Unlock()
+			if g.rotate[level] > 0 {
+				err = g.toStdBuffer(level, str, val...)
+			} else {
+				err = g.sout(level, str, val...)
+			}
 		} else {
-			g.mu.Lock()
-			_, err = fmt.Fprintf(g.std[level], str+"\n", val...)
-			g.mu.Unlock()
+			if g.rotate[level] > 0 {
+				err = g.toStdBuffer(level, str, val...)
+			} else {
+				err = g.sout(level, str, val...)
+			}
 		}
 		if err != nil {
 			return err
@@ -451,10 +470,47 @@ func (g *Glg) out(level, format string, val ...interface{}) error {
 		w, ok := g.writer[level]
 		g.mu.Unlock()
 		if ok && w != nil {
+			g.mu.Lock()
 			_, err = fmt.Fprintf(w, str+"\n", val...)
+			g.mu.Unlock()
 		}
+		// if g.rotate[level] > 0 {
+		// 	err = g.toWriterBuffer(level, str, val...)
+		// } else {
+		// 	err = g.fout(level, str, val...)
+		// }
 	}
 	return err
+}
+
+func (g *Glg) sout(level, str string, val ...interface{}) error {
+	g.mu.Lock()
+	_, err := fmt.Fprintf(g.std[level], g.colors[level](str)+"\n", val...)
+	g.mu.Unlock()
+	return err
+}
+
+func (g *Glg) fout(level, str string, val ...interface{}) (err error) {
+	g.mu.Lock()
+	w, ok := g.writer[level]
+	g.mu.Unlock()
+	if ok && w != nil {
+		g.mu.Lock()
+		_, err = fmt.Fprintf(w, str+"\n", val...)
+		g.mu.Unlock()
+	}
+	return
+}
+
+func (g *Glg) toStdBuffer(level, str string, val ...interface{}) error {
+	g.mu.Lock()
+	_, err := fmt.Fprintf(g.std[level], g.colors[level](str)+"\n", val...)
+	g.mu.Unlock()
+	return err
+}
+
+func (g *Glg) toWriterBuffer(level, str string, val ...interface{}) error {
+	return nil
 }
 
 // Log writes std log event
